@@ -1,0 +1,6 @@
+{
+  "name": "Cookie Care",
+  "description": "An enterprise-grade web application to scan website cookies and review Data Processing Agreements (DPAs), providing detailed insights into tracking technologies and contractual privacy risks.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
