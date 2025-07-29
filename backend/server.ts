@@ -1,5 +1,5 @@
 
-import express, { Request, Response } from 'express';
+import express from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -69,44 +69,76 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const model = "gemini-2.5-flash";
 
 
-// --- SHARED BROWSER MANAGEMENT ---
+// --- ROBUST, SERVERLESS-FRIENDLY BROWSER MANAGEMENT ---
 let browserPromise: Promise<Browser> | null = null;
 
-const getBrowser = (): Promise<Browser> => {
-    if (!browserPromise) {
-        console.log('[PUPPETEER] Creating new browser launch promise.');
-        browserPromise = (async () => {
-            try {
-                const executablePath = await chromium.executablePath();
-                
-                const browser = await puppeteer.launch({
-                    args: [
-                        ...chromium.args,
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--ignore-certificate-errors',
-                    ],
-                    executablePath,
-                    headless: true,
-                });
-
-                browser.on('disconnected', () => {
-                    console.warn('[PUPPETEER] Browser disconnected. Clearing promise for relaunch on next request.');
-                    browserPromise = null;
-                });
-
-                console.log('[PUPPETEER] Browser launched successfully.');
+/**
+ * Gets a shared, connected Puppeteer Browser instance.
+ * This function is designed to be robust for serverless environments by:
+ * 1. Reusing a single browser instance across invocations.
+ * 2. Proactively checking `browser.isConnected()` to handle cases where the
+ *    underlying process was terminated without a clean disconnect event.
+ * 3. Setting a `disconnected` event listener as a fallback.
+ * 4. Clearing the shared promise on failure to ensure self-healing.
+ */
+const getBrowser = async (): Promise<Browser> => {
+    // If a promise exists, check its status before reusing.
+    if (browserPromise) {
+        try {
+            const browser = await browserPromise;
+            if (browser.isConnected()) {
+                console.log('[PUPPETEER] Reusing existing connected browser.');
                 return browser;
-            } catch (error) {
-                console.error('[PUPPETEER] Browser launch failed. Clearing promise.', error);
-                browserPromise = null;
-                throw error;
             }
-        })();
-    } else {
-        console.log('[PUPPETEER] Reusing existing browser launch promise.');
+            console.warn('[PUPPETEER] Stale browser detected (disconnected). Clearing promise for relaunch.');
+            // Attempt to close, but don't worry if it fails.
+            browser.close().catch(e => console.warn(`[PUPPETEER] Non-critical error closing stale browser: ${e.message}`));
+            browserPromise = null;
+        } catch (error) {
+            console.error('[PUPPETEER] Existing browser promise was rejected. Clearing for relaunch.', error);
+            browserPromise = null;
+        }
     }
+
+    console.log('[PUPPETEER] Creating new browser instance.');
+    
+    // Create a new launch promise.
+    browserPromise = (async () => {
+        try {
+            const browser = await puppeteer.launch({
+                args: [
+                    ...chromium.args,
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu', // Recommended for server/CI environments
+                    '--ignore-certificate-errors',
+                ],
+                executablePath: await chromium.executablePath(),
+                headless: true,
+            });
+
+            // The 'disconnected' event is a good fallback mechanism.
+            browser.on('disconnected', () => {
+                console.warn('[PUPPETEER] Browser disconnected event fired. Clearing promise for next request.');
+                // Only clear the promise if it's the one for this browser instance.
+                // This prevents a race condition where a new browser is launching
+                // while the old one emits its disconnect event.
+                if (browserPromise && browserPromise.then(b => b === browser)) {
+                    browserPromise = null;
+                }
+            });
+
+            console.log('[PUPPETEER] Browser launched successfully.');
+            return browser;
+        } catch (error) {
+            console.error('[PUPPETEER] Browser launch failed.', error);
+            // Ensure the promise is cleared on a catastrophic launch failure.
+            browserPromise = null;
+            throw error; // Re-throw to fail the current request.
+        }
+    })();
+
     return browserPromise;
 };
 
@@ -271,7 +303,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response) => {
+app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -459,7 +491,7 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response) => {
+app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -544,7 +576,7 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response) => {
+app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
