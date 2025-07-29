@@ -1,6 +1,4 @@
-
-import express, { type Request, type Response } from 'express';
-import { exit } from 'process';
+import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -9,15 +7,42 @@ import { CookieCategory, type CookieInfo, type ScanResultData, type TrackerInfo,
 
 dotenv.config();
 
-const app: express.Express = express();
-const port = 3001;
+const app = express();
+const port = process.env.PORT || 3001; // Use Render's port, fallback to 3001 for local
 
-app.use(cors());
+// --- Production-Ready CORS Setup ---
+const allowedOrigins = [
+  'http://localhost:3000', // A common port for local React dev
+  process.env.FRONTEND_URL // The production URL of your frontend
+].filter(Boolean); // Filter out undefined/null values if FRONTEND_URL is not set
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length === 0) {
+        // If no origins are specified (e.g. in local dev without FRONTEND_URL), allow all.
+        // This maintains the previous permissive behavior for local-only testing.
+        return callback(null, true);
+    }
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  }
+}));
+
+if (!process.env.FRONTEND_URL) {
+    console.warn('[CORS] WARNING: FRONTEND_URL environment variable is not set. CORS will be less secure and may accept requests from any origin.');
+}
+
+
 app.use(express.json({ limit: '10mb' }));
 
 if (!process.env.API_KEY) {
   console.error("FATAL ERROR: API_KEY environment variable is not set.");
-  exit(1);
+  (process as any).exit(1);
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -183,7 +208,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -370,7 +395,7 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -394,7 +419,7 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
           For each clause:
           1.  **summary**: A neutral summary of what the clause contains.
           2.  **risk**: A detailed analysis of the risks for the specified perspective. Be specific.
-          3.  **riskLevel**: 'Low', 'Medium', or 'High'. If a key clause is missing or vague, assign 'High' risk.
+          3.  **riskLevel**: 'Low', 'Medium', 'High'. If a key clause is missing or vague, assign 'High' risk.
           4.  **recommendation**: A concrete, actionable recommendation for negotiation or clarification.
           5.  **negotiationTip**: A sharp, strategic tip for negotiation. Example: "Propose capping liability at 12 months of fees paid." or "Demand a specific timeframe for breach notification (e.g., 24 hours)."
 
@@ -455,7 +480,7 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -556,5 +581,5 @@ app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilitySc
 
 
 app.listen(port, () => {
-  console.log(`[SERVER] Cookie Care listening on http://localhost:${port}`);
+  console.log(`[SERVER] Cookie Care listening on port ${port}`);
 });
