@@ -1,4 +1,3 @@
-
 import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';

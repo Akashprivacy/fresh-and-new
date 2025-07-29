@@ -1,4 +1,3 @@
-
 {
   "name": "cookie-scanner-backend",
   "version": "1.0.0",
@@ -8,6 +7,7 @@
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",
+    "postinstall": "npx puppeteer browsers install chrome",
     "dev": "npm run build && npm start"
   },
   "dependencies": {
