@@ -1,5 +1,5 @@
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -11,19 +11,25 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 
-// --- ROBUST, PRODUCTION-READY CORS SETUP ---
+// --- DEFINITIVE, PRODUCTION-READY CORS SETUP ---
 const allowedOrigins = [
-  process.env.FRONTEND_URL, // The production URL from environment variables, e.g., 'https://cookie-care.vercel.app'
-  'http://localhost:3000', // Common local dev ports
+  // Hardcode the Vercel production URL to guarantee it's always allowed.
+  'https://cookie-care.vercel.app', 
+  
+  // Also include the URL from environment variables for flexibility.
+  process.env.FRONTEND_URL, 
+  
+  // Include common local development URLs.
+  'http://localhost:3000',
   'http://localhost:5173',
-  'http://127.0.0.1:5500' // For local 'Live Server' extensions
-].filter(Boolean); // Removes any falsy values like undefined if FRONTEND_URL is not set
+  'http://127.0.0.1:5500'
+].filter(Boolean); // Removes any falsy values (like an unset process.env.FRONTEND_URL)
 
-console.log(`[CORS] Allowed Origins: ${allowedOrigins.join(', ')}`);
+console.log(`[CORS] Allowed Origins configured: ${allowedOrigins.join(', ')}`);
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow requests with no origin (like mobile apps, curl, or server-to-server)
     if (!origin) {
       console.log('[CORS] Allowing request with no origin.');
       return callback(null, true);
@@ -43,8 +49,8 @@ const corsOptions: cors.CorsOptions = {
 };
 
 // This is CRITICAL. It tells the server to handle the browser's preflight OPTIONS request
-// before it attempts the actual POST/GET request.
-app.options('*', cors(corsOptions));
+// before it attempts the actual POST/GET/etc. request. This must come before other routes.
+app.options('*', cors(corsOptions)); 
 
 // Use the CORS middleware for all other requests.
 app.use(cors(corsOptions));
@@ -221,7 +227,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -408,7 +414,7 @@ app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, 
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -493,7 +499,7 @@ app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewReques
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -548,7 +554,7 @@ app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, Vulnera
                             description: { type: Type.STRING, description: "A detailed explanation of the vulnerability and its potential impact, as an expert would describe it." },
                             risk: { type: Type.STRING, description: "Risk level for this finding: 'Critical', 'High', 'Medium', 'Low', 'Informational'." },
                             remediation: { type: Type.STRING, description: "A concrete, actionable plan with code examples to fix the vulnerability." },
-                            owaspCategory: { type: Type.STRING, description: "The most relevant OWASP Top 10 2021 category (e.g., 'A05:2021-Security Misconfiguration')." }
+                            owaspCategory: { type: Type.STRING, description: "The most relevant OWASP Top 10 2011 category (e.g., 'A05:2021-Security Misconfiguration')." }
                         },
                         required: ["title", "description", "risk", "remediation", "owaspCategory"]
                     }
