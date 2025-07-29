@@ -1,6 +1,6 @@
 
-import express, { Request, Response } from 'express';
-import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer-core';
+import express, { Request, Response, RequestHandler } from 'express';
+import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -54,7 +54,7 @@ const corsOptions: cors.CorsOptions = {
 };
 
 // Use the CORS middleware for all requests. It handles preflight OPTIONS requests automatically.
-app.use(cors(corsOptions));
+app.use(cors(corsOptions) as RequestHandler);
 // --- END OF CORS SETUP ---
 
 
@@ -67,6 +67,49 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const model = "gemini-2.5-flash";
+
+
+// --- SHARED BROWSER MANAGEMENT ---
+let browserPromise: Promise<Browser> | null = null;
+
+const getBrowser = (): Promise<Browser> => {
+    if (!browserPromise) {
+        console.log('[PUPPETEER] Creating new browser launch promise.');
+        browserPromise = (async () => {
+            try {
+                const executablePath = await chromium.executablePath();
+                
+                const browser = await puppeteer.launch({
+                    args: [
+                        ...chromium.args,
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--ignore-certificate-errors',
+                    ],
+                    executablePath,
+                    headless: 'new',
+                });
+
+                browser.on('disconnected', () => {
+                    console.warn('[PUPPETEER] Browser disconnected. Clearing promise for relaunch on next request.');
+                    browserPromise = null;
+                });
+
+                console.log('[PUPPETEER] Browser launched successfully.');
+                return browser;
+            } catch (error) {
+                console.error('[PUPPETEER] Browser launch failed. Clearing promise.', error);
+                browserPromise = null;
+                throw error;
+            }
+        })();
+    } else {
+        console.log('[PUPPETEER] Reusing existing browser launch promise.');
+    }
+    return browserPromise;
+};
+
 
 // --- HELPER FUNCTIONS ---
 
@@ -228,22 +271,15 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
-  const { url } = req.body;
+app.post('/api/scan', async (req: Request, res: Response) => {
+  const { url } = req.body as ApiScanRequestBody;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
   console.log(`[SERVER] Received scan request for: ${url}`);
-  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
   try {
-    console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
-    browser = await puppeteer.launch({
-        args: [...chromium.args, '--ignore-certificate-errors'],
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
-    });
-    
-    const context = await browser.createBrowserContext();
+    const browser = await getBrowser();
+    context = await browser.createBrowserContext();
     const page = await context.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
     
@@ -414,15 +450,17 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
     console.error('[SERVER] Scan failed:', message, error);
     res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
   } finally {
-    if (browser) await browser.close();
+    if (context) {
+      await context.close();
+    }
   }
 });
 
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
-    const { dpaText, perspective } = req.body;
+app.post('/api/review-dpa', async (req: Request, res: Response) => {
+    const { dpaText, perspective } = req.body as DpaReviewRequestBody;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
     }
@@ -506,21 +544,16 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
-    const { url } = req.body;
+app.post('/api/scan-vulnerability', async (req: Request, res: Response) => {
+    const { url } = req.body as VulnerabilityScanBody;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
-    let browser: Browser | null = null;
+    let context: BrowserContext | null = null;
     try {
-        console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
-        browser = await puppeteer.launch({
-            args: [...chromium.args, '--ignore-certificate-errors'],
-            defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
-        });
-        const page = await browser.newPage();
+        const browser = await getBrowser();
+        context = await browser.createBrowserContext();
+        const page = await context.newPage();
         
         const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 });
         const headers = response?.headers() || {};
@@ -607,7 +640,9 @@ app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilitySc
         console.error('[SERVER] Vulnerability scan failed:', message);
         res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
     } finally {
-        if (browser) await browser.close();
+        if (context) {
+            await context.close();
+        }
     }
 });
 
