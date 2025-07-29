@@ -1,5 +1,5 @@
 
-import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
+import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -228,7 +228,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -237,16 +237,16 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
   try {
     console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
     browser = await puppeteer.launch({
-        args: chromium.args,
+        args: [...chromium.args, '--ignore-certificate-errors'],
+        defaultViewport: chromium.defaultViewport,
         executablePath: await chromium.executablePath(),
-        headless: true,
+        headless: chromium.headless,
     });
     
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
-    await page.setViewport({ width: 1920, height: 1080 });
-
+    
     // --- State 1: Pre-Consent ---
     console.log('[SCAN] Capturing pre-consent state...');
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 180000 }); // Increased timeout to 3 minutes
@@ -411,7 +411,7 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
 
   } catch (error) {
     const message = error instanceof Error ? error.message : "An unknown error occurred.";
-    console.error('[SERVER] Scan failed:', message);
+    console.error('[SERVER] Scan failed:', message, error);
     res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
   } finally {
     if (browser) await browser.close();
@@ -421,7 +421,7 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -506,7 +506,7 @@ app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequest
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -515,9 +515,10 @@ app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, Vulnerab
     try {
         console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
         browser = await puppeteer.launch({
-            args: chromium.args,
+            args: [...chromium.args, '--ignore-certificate-errors'],
+            defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
-            headless: true,
+            headless: chromium.headless,
         });
         const page = await browser.newPage();
         
