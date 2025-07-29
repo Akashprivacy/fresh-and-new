@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+
+import express from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -34,8 +35,12 @@ const corsOptions: cors.CorsOptions = {
       return callback(null, true);
     }
     
-    // Check if the incoming origin is on our list of allowed sites.
-    if (allowedOrigins.includes(origin)) {
+    // The pattern to match Vercel URLs for this project.
+    // It allows the main production URL and any preview URLs like 'cookie-care-*.vercel.app'
+    const vercelPattern = /^https:\/\/cookie-care.*\.vercel\.app$/;
+
+    // Check if the incoming origin is on our static list OR if it's a valid Vercel URL.
+    if (allowedOrigins.includes(origin) || vercelPattern.test(origin)) {
       console.log(`[CORS] Origin allowed: ${origin}`);
       return callback(null, true);
     }
@@ -47,11 +52,7 @@ const corsOptions: cors.CorsOptions = {
   },
 };
 
-// This is CRITICAL. It tells the server to handle the browser's preflight OPTIONS request
-// before it attempts the actual POST/GET/etc. request. This must come before other routes.
-app.options('*', cors(corsOptions)); 
-
-// Use the CORS middleware for all other requests.
+// Use the CORS middleware for all requests. It handles preflight OPTIONS requests automatically.
 app.use(cors(corsOptions));
 // --- END OF CORS SETUP ---
 
@@ -226,7 +227,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -413,7 +414,7 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -498,7 +499,7 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
