@@ -1,5 +1,5 @@
 
-import express, { type Request, type Response } from 'express';
+import express from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -12,43 +12,41 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // --- ROBUST, PRODUCTION-READY CORS SETUP ---
-const frontendUrl = process.env.FRONTEND_URL;
-if (!frontendUrl) {
-    // This warning is important for security.
-    console.warn('[CORS WARNING] The FRONTEND_URL environment variable is not set. Requests may be blocked in production.');
-}
+const allowedOrigins = [
+  process.env.FRONTEND_URL, // The production URL from environment variables, e.g., 'https://cookie-care.vercel.app'
+  'http://localhost:3000', // Common local dev ports
+  'http://localhost:5173',
+  'http://127.0.0.1:5500' // For local 'Live Server' extensions
+].filter(Boolean); // Removes any falsy values like undefined if FRONTEND_URL is not set
 
-const corsOptions = {
-  // The 'origin' function checks if the incoming request is from an allowed site.
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    console.log(`[CORS] Request received from origin: ${origin}`);
-    
-    // Allow requests that don't have an origin (like Postman, mobile apps, or server-to-server calls)
+console.log(`[CORS] Allowed Origins: ${allowedOrigins.join(', ')}`);
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) {
       console.log('[CORS] Allowing request with no origin.');
       return callback(null, true);
     }
     
-    const allowedOrigins = [
-      frontendUrl, // The production URL from environment variables
-      'http://localhost:3000', // Common dev ports
-      'http://localhost:5173'
-    ].filter(Boolean) as string[]; // Remove any null/undefined entries
-
-    // Check if the request's origin is on our list of approved sites.
+    // Check if the incoming origin is on our list of allowed sites.
     if (allowedOrigins.includes(origin)) {
-      console.log(`[CORS] Allowed origin: ${origin}`);
+      console.log(`[CORS] Origin allowed: ${origin}`);
       return callback(null, true);
     }
 
     // If the origin is not on our list, block the request.
-    console.error(`[CORS] Blocking request from unapproved origin: ${origin}`);
-    callback(new Error('This origin is not allowed by the CORS policy.'));
+    const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+    console.error(`[CORS] Blocking request. ${msg}`);
+    return callback(new Error(msg), false);
   },
-  optionsSuccessStatus: 200 // For legacy browser compatibility
 };
 
-// Use the CORS middleware for all incoming requests. This will handle all checks.
+// This is CRITICAL. It tells the server to handle the browser's preflight OPTIONS request
+// before it attempts the actual POST/GET request.
+app.options('*', cors(corsOptions));
+
+// Use the CORS middleware for all other requests.
 app.use(cors(corsOptions));
 // --- END OF CORS SETUP ---
 
@@ -223,7 +221,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -410,7 +408,7 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -495,7 +493,7 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
