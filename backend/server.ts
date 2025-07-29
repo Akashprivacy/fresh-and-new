@@ -1,5 +1,5 @@
 
-import express, { Request, Response, RequestHandler } from 'express';
+import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -23,7 +23,7 @@ const allowedOrigins = [
   // Include common local development URLs.
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://127.0.0.1:5500'
+  'http://12-7.0.0.1:5500'
 ].filter(Boolean); // Removes any falsy values (like an unset process.env.FRONTEND_URL)
 
 console.log(`[CORS] Allowed Origins configured: ${allowedOrigins.join(', ')}`);
@@ -54,7 +54,7 @@ const corsOptions: cors.CorsOptions = {
 };
 
 // Use the CORS middleware for all requests. It handles preflight OPTIONS requests automatically.
-app.use(cors(corsOptions) as RequestHandler);
+app.use(cors(corsOptions));
 // --- END OF CORS SETUP ---
 
 
@@ -88,7 +88,7 @@ const getBrowser = (): Promise<Browser> => {
                         '--ignore-certificate-errors',
                     ],
                     executablePath,
-                    headless: 'new',
+                    headless: true,
                 });
 
                 browser.on('disconnected', () => {
@@ -271,8 +271,8 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request, res: Response) => {
-  const { url } = req.body as ApiScanRequestBody;
+app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response) => {
+  const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
   console.log(`[SERVER] Received scan request for: ${url}`);
@@ -459,8 +459,8 @@ app.post('/api/scan', async (req: Request, res: Response) => {
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request, res: Response) => {
-    const { dpaText, perspective } = req.body as DpaReviewRequestBody;
+app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response) => {
+    const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
     }
@@ -544,8 +544,8 @@ app.post('/api/review-dpa', async (req: Request, res: Response) => {
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request, res: Response) => {
-    const { url } = req.body as VulnerabilityScanBody;
+app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response) => {
+    const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
