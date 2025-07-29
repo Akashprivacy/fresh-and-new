@@ -1,5 +1,5 @@
 
-import express, { Request, Response } from 'express';
+import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -67,91 +67,6 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const model = "gemini-2.5-flash";
-
-
-// --- ROBUST, SERVERLESS-FRIENDLY BROWSER MANAGEMENT ---
-let browserPromise: Promise<Browser> | null = null;
-let browserSessionId = 0; // Used to prevent race conditions with disconnect events
-
-/**
- * Gets a shared, connected Puppeteer Browser instance.
- * This function is designed to be robust for serverless environments by:
- * 1. Reusing a single browser instance across invocations.
- * 2. Proactively checking `browser.isConnected()` to handle cases where the
- *    underlying process was terminated without a clean disconnect event.
- * 3. Using a session ID to safely handle the `disconnected` event without race conditions.
- * 4. Clearing the shared promise on failure to ensure self-healing.
- */
-const getBrowser = async (): Promise<Browser> => {
-    // If a promise exists, check its status before reusing.
-    if (browserPromise) {
-        try {
-            const browser = await browserPromise;
-            if (browser.isConnected()) {
-                console.log('[PUPPETEER] Reusing existing connected browser.');
-                return browser;
-            }
-            console.warn('[PUPPETEER] Stale browser detected (disconnected). Clearing promise for relaunch.');
-            // Attempt to close, but don't worry if it fails.
-            browser.close().catch(e => console.warn(`[PUPPETEER] Non-critical error closing stale browser: ${e.message}`));
-            browserPromise = null; // Will be reset below
-        } catch (error) {
-            console.error('[PUPPETEER] Existing browser promise was rejected. Clearing for relaunch.', error);
-            browserPromise = null; // Will be reset below
-        }
-    }
-
-    console.log('[PUPPETEER] Creating new browser instance.');
-    
-    // Assign a unique ID for this launch attempt to prevent race conditions.
-    const currentSessionId = ++browserSessionId;
-
-    // Create a new launch promise.
-    browserPromise = (async () => {
-        try {
-            const browser = await puppeteer.launch({
-                args: [
-                    ...chromium.args,
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu', // Recommended for server/CI environments
-                    '--ignore-certificate-errors',
-                ],
-                executablePath: await chromium.executablePath(),
-                headless: true,
-            });
-
-            // The 'disconnected' event is a good fallback mechanism.
-            browser.on('disconnected', () => {
-                console.warn('[PUPPETEER] Browser disconnected event fired.');
-                // Only clear the promise if it belongs to this browser's session.
-                // This prevents a race condition where a new browser is launching
-                // while an old one emits its disconnect event, which would otherwise
-                // nullify the new promise.
-                if (browserSessionId === currentSessionId) {
-                    browserPromise = null;
-                    console.log(`[PUPPETEER] Cleared promise for session ID: ${currentSessionId}`);
-                } else {
-                    console.log(`[PUPPETEER] Ignored disconnect event from stale session ID (current is ${browserSessionId})`);
-                }
-            });
-
-            console.log('[PUPPETEER] Browser launched successfully.');
-            return browser;
-        } catch (error) {
-            console.error('[PUPPETEER] Browser launch failed.', error);
-            // Ensure the promise is cleared on a catastrophic launch failure,
-            // but only if a new one hasn't been started already.
-            if (browserSessionId === currentSessionId) {
-                browserPromise = null;
-            }
-            throw error; // Re-throw to fail the current request.
-        }
-    })();
-
-    return browserPromise;
-};
 
 
 // --- HELPER FUNCTIONS ---
@@ -314,15 +229,29 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response) => {
+app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
   console.log(`[SERVER] Received scan request for: ${url}`);
-  let context: BrowserContext | null = null;
+  let browser: Browser | null = null;
   try {
-    const browser = await getBrowser();
-    context = await browser.createBrowserContext();
+    console.log('[PUPPETEER] Launching new browser for this request.');
+    browser = await puppeteer.launch({
+      args: [
+        ...chromium.args,
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--ignore-certificate-errors',
+      ],
+      executablePath: await chromium.executablePath(),
+      headless: true,
+    });
+    console.log('[PUPPETEER] Browser launched successfully.');
+    
+    const context = await browser.createBrowserContext();
     const page = await context.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
     
@@ -493,8 +422,9 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
     console.error('[SERVER] Scan failed:', message, error);
     res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
   } finally {
-    if (context) {
-      await context.close();
+    if (browser) {
+      console.log('[PUPPETEER] Closing browser for this request.');
+      await browser.close();
     }
   }
 });
@@ -502,7 +432,7 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response) => {
+app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -587,15 +517,29 @@ app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, 
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response) => {
+app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
-    let context: BrowserContext | null = null;
+    let browser: Browser | null = null;
     try {
-        const browser = await getBrowser();
-        context = await browser.createBrowserContext();
+        console.log('[PUPPETEER] Launching new browser for this request.');
+        browser = await puppeteer.launch({
+            args: [
+                ...chromium.args,
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--ignore-certificate-errors',
+            ],
+            executablePath: await chromium.executablePath(),
+            headless: true,
+        });
+        console.log('[PUPPETEER] Browser launched successfully.');
+        
+        const context = await browser.createBrowserContext();
         const page = await context.newPage();
         
         const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 });
@@ -683,8 +627,9 @@ app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilitySc
         console.error('[SERVER] Vulnerability scan failed:', message);
         res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
     } finally {
-        if (context) {
-            await context.close();
+        if (browser) {
+            console.log('[PUPPETEER] Closing browser for this request.');
+            await browser.close();
         }
     }
 });
