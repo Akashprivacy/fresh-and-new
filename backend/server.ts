@@ -1,5 +1,5 @@
 
-import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
+import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -228,7 +228,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -237,9 +237,9 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
   try {
     console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
     browser = await puppeteer.launch({
-        args: chromium.minArgs,
+        args: chromium.args,
         executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
+        headless: 'new',
     });
     
     const context = await browser.createBrowserContext();
@@ -421,7 +421,7 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -506,7 +506,7 @@ app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequest
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -515,9 +515,9 @@ app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, Vulnerab
     try {
         console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
         browser = await puppeteer.launch({
-            args: chromium.minArgs,
+            args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            headless: 'new',
         });
         const page = await browser.newPage();
         
