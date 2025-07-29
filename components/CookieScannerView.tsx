@@ -5,6 +5,8 @@ import { ScanningProgress } from './ScanningProgress';
 import { AlertTriangleIcon } from './Icons';
 import type { ScanResultData } from '../types';
 
+const API_BASE_URL = (window as any).API_BASE_URL;
+
 export const CookieScannerView: React.FC = () => {
   const [url, setUrl] = useState<string>('');
   const [scanResult, setScanResult] = useState<ScanResultData | null>(null);
@@ -21,7 +23,7 @@ export const CookieScannerView: React.FC = () => {
     setScanResult(null);
 
     try {
-      const response = await fetch('http://localhost:3001/api/scan', {
+      const response = await fetch(`${API_BASE_URL}/api/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),

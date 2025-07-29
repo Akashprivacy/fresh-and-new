@@ -1,9 +1,10 @@
-
 import React, { useState, useCallback } from 'react';
 import type { DpaAnalysisResult, DpaPerspective } from '../types';
 import { LoadingSpinner } from './LoadingSpinner';
 import { AlertTriangleIcon, DocumentTextIcon } from './Icons';
 import { DpaResultDisplay } from './DpaResultDisplay';
+
+const API_BASE_URL = (window as any).API_BASE_URL;
 
 export const DpaReviewerView: React.FC = () => {
     const [dpaText, setDpaText] = useState<string>('');
@@ -22,7 +23,7 @@ export const DpaReviewerView: React.FC = () => {
         setAnalysisResult(null);
 
         try {
-            const response = await fetch('http://localhost:3001/api/review-dpa', {
+            const response = await fetch(`${API_BASE_URL}/api/review-dpa`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dpaText, perspective }),

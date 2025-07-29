@@ -7,25 +7,86 @@
     <title>Cookie Care</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        'brand-blue': {
-                            DEFAULT: 'hsl(210, 90%, 50%)',
-                            'light': 'hsl(210, 90%, 55%)',
-                            'dark': 'hsl(210, 90%, 45%)',
-                        },
-                    }
-                }
-            }
-        }
+    // Custom Tailwind theme configuration to match your design
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'brand-blue': {
+              DEFAULT: 'hsl(210, 90%, 50%)',
+              'light': 'hsl(210, 90%, 55%)',
+              'dark': 'hsl(210, 90%, 45%)',
+            },
+          }
+        },
+      }
+    }
     </script>
-    <link rel="stylesheet" href="/styles/index.css" />
+    <style>
+        @import url('https://rsms.me/inter/inter.css');
+        html { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+        @supports (font-variation-settings: normal) {
+            html { font-family: 'Inter var', sans-serif; }
+        }
+
+        :root {
+            --bg-primary: hsl(0, 0%, 100%);
+            --bg-secondary: hsl(220, 13%, 96%);
+            --bg-tertiary: hsl(220, 13%, 91%);
+            --border-primary: hsl(220, 13%, 88%);
+            --text-primary: hsl(220, 10%, 40%);
+            --text-headings: hsl(220, 14%, 20%);
+            --text-accent: var(--brand-blue);
+            --pie-stroke-color: var(--bg-secondary);
+        }
+
+        html.dark {
+            --bg-primary: hsl(222, 18%, 13%);
+            --bg-secondary: hsl(222, 18%, 16%);
+            --bg-tertiary: hsl(222, 18%, 20%);
+            --border-primary: hsl(222, 18%, 25%);
+            --text-primary: hsl(220, 10%, 65%);
+            --text-headings: hsl(220, 15%, 90%);
+            --text-accent: hsl(210, 100%, 70%);
+            --pie-stroke-color: var(--bg-secondary);
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translate3d(0, 20px, 0); }
+            to { opacity: 1; transform: translate3d(0, 0, 0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease-out forwards; }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background-color: var(--border-primary); border-radius: 4px; border: 2px solid var(--bg-primary); }
+        ::-webkit-scrollbar-thumb:hover { background-color: var(--text-primary); }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "recharts": "https://esm.sh/recharts@^3.1.0",
+    "jspdf": "https://esm.sh/jspdf@^3.0.1",
+    "html2canvas": "https://esm.sh/html2canvas@^1.4.1",
+    "express": "https://esm.sh/express@^5.1.0",
+    "puppeteer": "https://esm.sh/puppeteer@^24.15.0",
+    "cors": "https://esm.sh/cors@^2.8.5",
+    "dotenv": "https://esm.sh/dotenv@^17.2.1",
+    "@google/genai": "https://esm.sh/@google/genai@^1.11.0"
+  }
+}
+</script>
 </head>
 <body class="bg-[var(--bg-primary)] text-[var(--text-primary)] antialiased transition-colors duration-300">
     <div id="root"></div>
+    <script>
+      // Define a global, foolproof API URL for the application
+      window.API_BASE_URL = 'https://cookie-care-backend.onrender.com';
+    </script>
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>

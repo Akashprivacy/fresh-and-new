@@ -1,4 +1,5 @@
-import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
+
+import express from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -208,7 +209,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse<ScanResultData | { error: string }>) => {
+app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response<ScanResultData | { error: string }>) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -395,7 +396,7 @@ app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, r
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse<DpaAnalysisResult | { error: string }>) => {
+app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response<DpaAnalysisResult | { error: string }>) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -443,7 +444,7 @@ app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequest
                         clause: { type: Type.STRING, description: "The name of the DPA clause being analyzed." },
                         summary: { type: Type.STRING, description: "A neutral summary of what the clause contains." },
                         risk: { type: Type.STRING, description: "A detailed analysis of the risks for the specified perspective." },
-                        riskLevel: { type: Type.STRING, description: "Risk level for this clause: 'Low', 'Medium', or 'High'." },
+                        riskLevel: { type: Type.STRING, description: "Risk level for this clause: 'Low', 'Medium', 'High'." },
                         recommendation: { type: Type.STRING, description: "A concrete, actionable recommendation for negotiation or clarification." },
                         negotiationTip: { type: Type.STRING, description: "A sharp, strategic tip for negotiation." }
                     }, required: ["clause", "summary", "risk", "riskLevel", "recommendation", "negotiationTip"]
@@ -480,7 +481,7 @@ app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequest
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse<VulnerabilityReport | { error: string }>) => {
+app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response<VulnerabilityReport | { error: string }>) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
