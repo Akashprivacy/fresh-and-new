@@ -1,5 +1,5 @@
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
@@ -71,6 +71,7 @@ const model = "gemini-2.5-flash";
 
 // --- ROBUST, SERVERLESS-FRIENDLY BROWSER MANAGEMENT ---
 let browserPromise: Promise<Browser> | null = null;
+let browserSessionId = 0; // Used to prevent race conditions with disconnect events
 
 /**
  * Gets a shared, connected Puppeteer Browser instance.
@@ -78,7 +79,7 @@ let browserPromise: Promise<Browser> | null = null;
  * 1. Reusing a single browser instance across invocations.
  * 2. Proactively checking `browser.isConnected()` to handle cases where the
  *    underlying process was terminated without a clean disconnect event.
- * 3. Setting a `disconnected` event listener as a fallback.
+ * 3. Using a session ID to safely handle the `disconnected` event without race conditions.
  * 4. Clearing the shared promise on failure to ensure self-healing.
  */
 const getBrowser = async (): Promise<Browser> => {
@@ -93,15 +94,18 @@ const getBrowser = async (): Promise<Browser> => {
             console.warn('[PUPPETEER] Stale browser detected (disconnected). Clearing promise for relaunch.');
             // Attempt to close, but don't worry if it fails.
             browser.close().catch(e => console.warn(`[PUPPETEER] Non-critical error closing stale browser: ${e.message}`));
-            browserPromise = null;
+            browserPromise = null; // Will be reset below
         } catch (error) {
             console.error('[PUPPETEER] Existing browser promise was rejected. Clearing for relaunch.', error);
-            browserPromise = null;
+            browserPromise = null; // Will be reset below
         }
     }
 
     console.log('[PUPPETEER] Creating new browser instance.');
     
+    // Assign a unique ID for this launch attempt to prevent race conditions.
+    const currentSessionId = ++browserSessionId;
+
     // Create a new launch promise.
     browserPromise = (async () => {
         try {
@@ -120,12 +124,16 @@ const getBrowser = async (): Promise<Browser> => {
 
             // The 'disconnected' event is a good fallback mechanism.
             browser.on('disconnected', () => {
-                console.warn('[PUPPETEER] Browser disconnected event fired. Clearing promise for next request.');
-                // Only clear the promise if it's the one for this browser instance.
+                console.warn('[PUPPETEER] Browser disconnected event fired.');
+                // Only clear the promise if it belongs to this browser's session.
                 // This prevents a race condition where a new browser is launching
-                // while the old one emits its disconnect event.
-                if (browserPromise && browserPromise.then(b => b === browser)) {
+                // while an old one emits its disconnect event, which would otherwise
+                // nullify the new promise.
+                if (browserSessionId === currentSessionId) {
                     browserPromise = null;
+                    console.log(`[PUPPETEER] Cleared promise for session ID: ${currentSessionId}`);
+                } else {
+                    console.log(`[PUPPETEER] Ignored disconnect event from stale session ID (current is ${browserSessionId})`);
                 }
             });
 
@@ -133,8 +141,11 @@ const getBrowser = async (): Promise<Browser> => {
             return browser;
         } catch (error) {
             console.error('[PUPPETEER] Browser launch failed.', error);
-            // Ensure the promise is cleared on a catastrophic launch failure.
-            browserPromise = null;
+            // Ensure the promise is cleared on a catastrophic launch failure,
+            // but only if a new one hasn't been started already.
+            if (browserSessionId === currentSessionId) {
+                browserPromise = null;
+            }
             throw error; // Re-throw to fail the current request.
         }
     })();
@@ -303,7 +314,7 @@ const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], tracker
 
 interface ApiScanRequestBody { url: string; }
 
-app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, res: express.Response) => {
+app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Response) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -491,7 +502,7 @@ app.post('/api/scan', async (req: express.Request<{}, any, ApiScanRequestBody>, 
 
 interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
 
-app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewRequestBody>, res: express.Response) => {
+app.post('/api/review-dpa', async (req: Request<{}, any, DpaReviewRequestBody>, res: Response) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -576,7 +587,7 @@ app.post('/api/review-dpa', async (req: express.Request<{}, any, DpaReviewReques
 
 interface VulnerabilityScanBody { url: string; }
 
-app.post('/api/scan-vulnerability', async (req: express.Request<{}, any, VulnerabilityScanBody>, res: express.Response) => {
+app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilityScanBody>, res: Response) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
