@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.11.0",
-    "@sparticuz/chrome-aws-lambda": "^22.0.0",
+    "@sparticuz/chromium": "^123.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

@@ -1,7 +1,7 @@
 
 import express, { Request, Response } from 'express';
 import puppeteer, { type Cookie, type Page, type Frame, Browser } from 'puppeteer-core';
-import chrome from '@sparticuz/chrome-aws-lambda';
+import chromium from '@sparticuz/chromium';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -235,11 +235,12 @@ app.post('/api/scan', async (req: Request<{}, any, ApiScanRequestBody>, res: Res
   console.log(`[SERVER] Received scan request for: ${url}`);
   let browser: Browser | null = null;
   try {
-    console.log('[PUPPETEER] Using @sparticuz/chrome-aws-lambda to launch browser.');
+    console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
     browser = await puppeteer.launch({
-        args: chrome.args,
-        executablePath: await chrome.executablePath(),
-        headless: chrome.headless,
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
     });
     
     const context = await browser.createBrowserContext();
@@ -513,11 +514,12 @@ app.post('/api/scan-vulnerability', async (req: Request<{}, any, VulnerabilitySc
     console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
     let browser: Browser | null = null;
     try {
-        console.log('[PUPPETEER] Using @sparticuz/chrome-aws-lambda to launch browser.');
+        console.log('[PUPPETEER] Using @sparticuz/chromium to launch browser.');
         browser = await puppeteer.launch({
-            args: chrome.args,
-            executablePath: await chrome.executablePath(),
-            headless: chrome.headless,
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
         });
         const page = await browser.newPage();
         
