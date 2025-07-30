@@ -404,7 +404,7 @@ You are a senior cybersecurity analyst specializing in web application security.
     *   **Security Headers:** Missing or misconfigured headers (X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security, Content-Security-Policy, etc.).
     *   **Information Exposure:** Sensitive information in comments, metadata, or scripts (e.g., API keys, internal paths, versions).
     *   **Outdated Libraries:** Look for common JS libraries and mention the *potential* risk if they are outdated (e.g., "Uses jQuery, ensure it's the latest version to avoid known CVEs.").
-    *   **Insecure Form Handling:** `action` attributes pointing to HTTP endpoints, lack of CSRF tokens (mention this as a potential issue).
+    *   **Insecure Form Handling:** \`action\` attributes pointing to HTTP endpoints, lack of CSRF tokens (mention this as a potential issue).
     *   **Mixed Content:** Loading scripts or resources over HTTP on an HTTPS page.
 3.  **Structure and Detail:**
     *   'title': A clear, descriptive title for the vulnerability.
