@@ -1,7 +1,7 @@
 
-import express, { Request, Response, Application } from 'express';
-import puppeteer from '@sparticuz/chromium';
-import type { Cookie, Page, Frame, Browser, BrowserContext } from 'puppeteer-core';
+import express from 'express';
+import puppeteer from 'puppeteer-core';
+import type { Cookie, Page, Frame, Browser, BrowserContext, HTTPResponse } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -10,7 +10,7 @@ import { CookieCategory, type CookieInfo, type ScanResultData, type TrackerInfo,
 
 dotenv.config();
 
-const app: Application = express();
+const app: express.Application = express();
 const port = process.env.PORT || 3001;
 
 // --- DEFINITIVE, PRODUCTION-READY CORS SETUP ---
@@ -479,7 +479,7 @@ interface ApiScanRequestBody {
   url: string;
 }
 
-app.post('/api/scan', async (req: Request<{}, {}, ApiScanRequestBody>, res: Response) => {
+app.post('/api/scan', async (req: express.Request<{}, {}, ApiScanRequestBody>, res: express.Response) => {
     const { url } = req.body;
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -499,8 +499,8 @@ app.post('/api/scan', async (req: Request<{}, {}, ApiScanRequestBody>, res: Resp
 
         const siteDomain = getDomain(url);
         const collectedTrackers = new Set<string>();
-        const onResponse = (frame: Frame) => {
-            const requestUrl = frame.url();
+        const onResponse = (response: HTTPResponse) => {
+            const requestUrl = response.url();
             if (knownTrackerDomains.some(domain => requestUrl.includes(domain)) && !requestUrl.startsWith('data:')) {
                 collectedTrackers.add(requestUrl);
             }
@@ -615,7 +615,7 @@ interface DpaReviewRequestBody {
   perspective: DpaPerspective;
 }
 
-app.post('/api/review-dpa', async (req: Request<{}, {}, DpaReviewRequestBody>, res: Response) => {
+app.post('/api/review-dpa', async (req: express.Request<{}, {}, DpaReviewRequestBody>, res: express.Response) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -637,7 +637,7 @@ interface VulnerabilityScanBody {
     url: string;
 }
 
-app.post('/api/scan-vulnerability', async (req: Request<{}, {}, VulnerabilityScanBody>, res: Response) => {
+app.post('/api/scan-vulnerability', async (req: express.Request<{}, {}, VulnerabilityScanBody>, res: express.Response) => {
     const { url } = req.body;
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -679,7 +679,7 @@ app.post('/api/scan-vulnerability', async (req: Request<{}, {}, VulnerabilitySca
     }
 });
 
-app.get('/', (req, res) => {
+app.get('/', (req: express.Request, res: express.Response) => {
   res.send('Cookie Care Backend is running!');
 });
 
