@@ -493,7 +493,7 @@ app.post('/api/scan', async (req: express.Request<{}, {}, ApiScanRequestBody>, r
         browser = await puppeteer.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: 'new',
+            headless: true,
         });
         console.log('[PUPPETEER] Browser launched successfully.');
 
@@ -578,16 +578,26 @@ app.post('/api/scan', async (req: express.Request<{}, {}, ApiScanRequestBody>, r
             finalTrackers
         );
 
-        const finalCookiesWithAnalysis = finalRawCookies.map(cookie => {
+        const finalCookiesWithAnalysis: CookieInfo[] = finalRawCookies.map(cookie => {
             const info = getCookieInfo(cookie, siteDomain);
             const cookieAnalysis = analysis.cookies.find(c => c.key === info.key);
-            return { ...info, ...cookieAnalysis };
+            return {
+                ...info,
+                purpose: cookieAnalysis?.purpose ?? 'Purpose not determined by AI.',
+                category: cookieAnalysis?.category ?? CookieCategory.UNKNOWN,
+                complianceStatus: cookieAnalysis?.complianceStatus ?? 'Unknown',
+            };
         });
         
-        const finalTrackersWithAnalysis = finalTrackers.map(tracker => {
+        const finalTrackersWithAnalysis: TrackerInfo[] = finalTrackers.map(tracker => {
             const trackerAnalysis = analysis.trackers.find(t => t.key === tracker.key);
-            return { ...tracker, ...trackerAnalysis };
+            return {
+                ...tracker,
+                category: trackerAnalysis?.category ?? CookieCategory.UNKNOWN,
+                complianceStatus: trackerAnalysis?.complianceStatus ?? 'Unknown',
+            };
         });
+
 
         const scanResult: ScanResultData = {
             cookies: finalCookiesWithAnalysis,
@@ -651,7 +661,7 @@ app.post('/api/scan-vulnerability', async (req: express.Request<{}, {}, Vulnerab
         browser = await puppeteer.launch({
             args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: 'new',
+            headless: true,
         });
         console.log('[PUPPETEER] Browser launched successfully.');
         
