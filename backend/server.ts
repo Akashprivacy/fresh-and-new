@@ -1,6 +1,7 @@
 
-import express, { Request as ExpressRequest, Response as ExpressResponse } from 'express';
-import puppeteer, { type Cookie, type Page, type Frame, Browser, BrowserContext } from 'puppeteer-core';
+import express, { Request, Response, Application } from 'express';
+import puppeteer from '@sparticuz/chromium';
+import type { Cookie, Page, Frame, Browser, BrowserContext } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -9,7 +10,7 @@ import { CookieCategory, type CookieInfo, type ScanResultData, type TrackerInfo,
 
 dotenv.config();
 
-const app = express();
+const app: Application = express();
 const port = process.env.PORT || 3001;
 
 // --- DEFINITIVE, PRODUCTION-READY CORS SETUP ---
@@ -147,485 +148,460 @@ function extractJson(text: string): string {
 
 
 const knownTrackerDomains = [
-    'google-analytics.com', 'googletagmanager.com', 'analytics.google.com', 'doubleclick.net', 'googleadservices.com', 'googlesyndication.com', 'connect.facebook.net', 'facebook.com/tr', 'c.clarity.ms', 'clarity.ms', 'hotjar.com', 'hotjar.io', 'hjid.hotjar.com', 'hubspot.com', 'hs-analytics.net', 'track.hubspot.com', 'linkedin.com/px', 'ads.linkedin.com', 'twitter.com/i/ads', 'ads-twitter.com', 'bing.com/ads', 'semrush.com', 'optimizely.com', 'vwo.com', 'crazyegg.com', 'taboola.com', 'outbrain.com', 'criteo.com', 'addthis.com', 'sharethis.com', 'tiqcdn.com', // Tealium
+    'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'facebook.net', 'fbcdn.net',
+    'analytics.yahoo.com', 'linkedin.com/li/sso', 'bing.com', 'hotjar.com', 'hubspot.com',
+    'amazon-adsystem.com', 'criteo.com', 'adroll.com', 'outbrain.com', 'taboola.com',
+    'scorecardresearch.com', 'quantserve.com', 'adobedtm.com', 'demdex.net', 'matomo.org',
+    'mixpanel.com', 'segment.com', 'vwo.com', 'optimizely.com', 'crazyegg.com', 'yandex.ru'
 ];
 
-const getHumanReadableExpiry = (puppeteerCookie: Cookie): string => {
-    if (puppeteerCookie.session || puppeteerCookie.expires === -1) return "Session";
-    const expiryDate = new Date(puppeteerCookie.expires * 1000);
-    const now = new Date();
-    const diffSeconds = (expiryDate.getTime() - now.getTime()) / 1000;
-    if (diffSeconds < 0) return "Expired";
-    if (diffSeconds < 3600) return `${Math.round(diffSeconds / 60)} minutes`;
-    if (diffSeconds < 86400) return `${Math.round(diffSeconds / 3600)} hours`;
-    if (diffSeconds < 86400 * 30) return `${Math.round(diffSeconds / 86400)} days`;
-    if (diffSeconds < 86400 * 365) return `${Math.round(diffSeconds / (86400 * 30))} months`;
-    const years = parseFloat((diffSeconds / (86400 * 365)).toFixed(1));
-    return `${years} year${years > 1 ? 's' : ''}`;
-};
-
-async function findAndClickButton(frame: Frame, keywords: string[]): Promise<boolean> {
-  for (const text of keywords) {
-    try {
-      const clicked = await frame.evaluate((t) => {
-        const selectors = 'button, a, [role="button"], input[type="submit"], input[type="button"]';
-        const elements = Array.from(document.querySelectorAll(selectors));
-        const target = elements.find(el => {
-            const elText = (el.textContent || el.getAttribute('aria-label') || (el as HTMLInputElement).value || '').trim().toLowerCase();
-            return elText.includes(t)
-        });
-        if (target) {
-          (target as HTMLElement).click();
-          return true;
-        }
-        return false;
-      }, text);
-      if (clicked) {
-        console.log(`[CONSENT] Clicked button containing: "${text}"`);
-        await new Promise(r => setTimeout(r, 1500)); // Wait for actions post-click
-        return true;
-      }
-    } catch (error) {
-       if (error instanceof Error && !frame.isDetached()) {
-         console.warn(`[CONSENT] Warning on frame ${frame.url()}: ${error.message}`);
-       }
-    }
-  }
-  return false;
-}
-
-async function handleConsent(page: Page, action: 'accept' | 'reject'): Promise<boolean> {
-  console.log(`[CONSENT] Attempting to ${action} consent...`);
-  const acceptKeywords = ["accept all", "allow all", "agree to all", "accept cookies", "agree", "accept", "allow", "i agree", "ok", "got it", "continue", "i understand"];
-  const rejectKeywords = ["reject all", "deny all", "decline all", "reject cookies", "disagree", "reject", "deny", "decline", "necessary only", "strictly necessary"];
-  
-  const keywords = action === 'accept' ? acceptKeywords : rejectKeywords;
-
-  if (await findAndClickButton(page.mainFrame(), keywords)) return true;
-  for (const frame of page.frames()) {
-    if (!frame.isDetached() && frame !== page.mainFrame() && await findAndClickButton(frame, keywords)) return true;
-  }
-  
-  console.log(`[CONSENT] No actionable button found for "${action}".`);
-  return false;
-}
-
-const collectPageData = async (page: Page): Promise<{ cookies: Cookie[], trackers: Set<string> }> => {
-    const trackers = new Set<string>();
-    const requestListener = (request: any) => {
-        const reqUrl = request.url();
-        const trackerDomain = knownTrackerDomains.find(domain => reqUrl.includes(domain));
-        if (trackerDomain) trackers.add(`${trackerDomain}|${reqUrl}`);
-    };
-    page.on('request', requestListener);
-    
-    await page.reload({ waitUntil: 'networkidle2' });
-    
-    const cookies = await page.cookies();
-    
-    page.off('request', requestListener); // Clean up listener
-    return { cookies, trackers };
-}
-
-interface ApiScanRequestBody { url: string; }
-
-app.post('/api/scan', async (req: ExpressRequest<{}, any, ApiScanRequestBody>, res: ExpressResponse) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
-
-  console.log(`[SERVER] Received scan request for: ${url}`);
-  let browser: Browser | null = null;
+function getDomain(url: string): string {
   try {
-    console.log('[PUPPETEER] Launching new browser for this request.');
-    browser = await puppeteer.launch({
-      args: [
-        ...chromium.args,
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--ignore-certificate-errors',
-      ],
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
-    console.log('[PUPPETEER] Browser launched successfully.');
-    
-    const context = await browser.createBrowserContext();
-    const page = await context.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
-    
-    // --- State 1: Pre-Consent ---
-    console.log('[SCAN] Capturing pre-consent state...');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 180000 }); // Increased timeout to 3 minutes
-    const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 70 });
-    const { cookies: preConsentCookies, trackers: preConsentTrackers } = await collectPageData(page);
-    console.log(`[SCAN] Pre-consent: ${preConsentCookies.length} cookies, ${preConsentTrackers.size} trackers.`);
-    
-    // --- State 2: Post-Rejection ---
-    console.log('[SCAN] Capturing post-rejection state...');
-    await handleConsent(page, 'reject');
-    const { cookies: postRejectCookies, trackers: postRejectTrackers } = await collectPageData(page);
-    console.log(`[SCAN] Post-rejection: ${postRejectCookies.length} cookies, ${postRejectTrackers.size} trackers.`);
-    
-    // --- State 3: Post-Acceptance ---
-    console.log('[SCAN] Capturing post-acceptance state...');
-    await page.reload({ waitUntil: 'networkidle2' }); // Reload to reset state before accepting
-    await handleConsent(page, 'accept');
-    const { cookies: postAcceptCookies, trackers: postAcceptTrackers } = await collectPageData(page);
-    console.log(`[SCAN] Post-acceptance: ${postAcceptCookies.length} cookies, ${postAcceptTrackers.size} trackers.`);
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch (e) {
+    return '';
+  }
+}
 
-    const allCookieMap = new Map<string, any>();
-    const allTrackerMap = new Map<string, any>();
-
-    const processItems = (map: Map<string, any>, items: any[], state: string, isCookie: boolean) => {
-      items.forEach((item: any) => {
-        const key = isCookie ? `${item.name}|${item.domain}|${item.path}` : `${item.split('|')[0]}|${item.split('|')[1]}`;
-        if (!map.has(key)) map.set(key, { states: new Set() });
-        map.get(key).states.add(state);
-        map.get(key).data = item;
-      });
+function getCookieInfo(cookie: Cookie, siteDomain: string): Omit<CookieInfo, 'purpose' | 'category' | 'complianceStatus'> {
+    const expiry = cookie.expires === -1 ? 'Session' : new Date(cookie.expires * 1000).toLocaleString();
+    const provider = getDomain(cookie.domain) || siteDomain;
+    return {
+        key: `${cookie.name}:${cookie.domain}`,
+        name: cookie.name,
+        provider,
+        party: getDomain(cookie.domain) === siteDomain ? 'First' : 'Third',
+        expiry,
+        isHttpOnly: cookie.httpOnly,
+        isSecure: cookie.secure,
     };
-    
-    processItems(allCookieMap, preConsentCookies, 'pre-consent', true);
-    processItems(allCookieMap, postRejectCookies, 'post-rejection', true);
-    processItems(allCookieMap, postAcceptCookies, 'post-acceptance', true);
-    processItems(allTrackerMap, Array.from(preConsentTrackers), 'pre-consent', false);
-    processItems(allTrackerMap, Array.from(postRejectTrackers), 'post-rejection', false);
-    processItems(allTrackerMap, Array.from(postAcceptTrackers), 'post-acceptance', false);
+}
 
-    const itemsForAnalysis = {
-      cookies: Array.from(allCookieMap.entries()).map(([key, value]) => ({
-        key, name: value.data.name, provider: value.data.domain, states: Array.from(value.states)
-      })),
-      trackers: Array.from(allTrackerMap.entries()).map(([key, value]) => ({
-        key, provider: value.data.split('|')[0], states: Array.from(value.states)
-      })),
+function getTrackerInfo(requestUrl: string): Omit<TrackerInfo, 'category' | 'complianceStatus'>{
+    const provider = getDomain(requestUrl) || 'Unknown';
+    return {
+        key: requestUrl,
+        url: requestUrl,
+        provider,
     };
+}
+
+
+// --- GEMINI ANALYSIS FUNCTIONS ---
+
+async function analyzeWithGemini(
+    url: string,
+    preConsentCookies: Omit<CookieInfo, 'purpose' | 'category' | 'complianceStatus'>[],
+    preConsentTrackers: Omit<TrackerInfo, 'category' | 'complianceStatus'>[],
+    postRejectionCookies: Omit<CookieInfo, 'purpose' | 'category' | 'complianceStatus'>[],
+    postRejectionTrackers: Omit<TrackerInfo, 'category' | 'complianceStatus'>[],
+    finalCookies: Omit<CookieInfo, 'purpose' | 'category' | 'complianceStatus'>[],
+    finalTrackers: Omit<TrackerInfo, 'category' | 'complianceStatus'>[]
+): Promise<GeminiScanAnalysis> {
+    const systemInstruction = `
+You are a world-class expert in web privacy, GDPR, and CCPA compliance. Your task is to analyze cookie and tracker data from a three-stage website scan and provide a structured JSON response.
+
+**Analysis Rules:**
+
+1.  **Compliance Status Logic (Crucial):**
+    *   **'Pre-Consent Violation':** A non-essential cookie/tracker found in the 'preConsent' lists.
+    *   **'Post-Rejection Violation':** A non-essential cookie/tracker found in the 'postRejection' lists.
+    *   **'Compliant':**
+        *   Any cookie/tracker categorized as 'Necessary'.
+        *   Any non-essential cookie/tracker that is *only* present in the 'final' lists (meaning it was loaded correctly after consent).
+    *   **'Unknown':** If the status cannot be determined.
+
+2.  **Categorization:** Assign one of these categories: 'Necessary', 'Analytics', 'Marketing', 'Functional', 'Unknown'.
+    *   'Necessary' cookies are vital for basic site functions (e.g., session IDs, load balancing, security tokens).
+    *   'Analytics' cookies track user behavior and statistics.
+    *   'Marketing' cookies are for advertising, retargeting, and user profiling.
+    *   'Functional' cookies remember user choices (e.g., language, region).
+
+3.  **Risk Assessment:** For GDPR and CCPA, provide a 'riskLevel' ('Low', 'Medium', 'High', 'Critical') and a concise 'assessment' summarizing the findings.
+    *   **Low Risk:** Only compliant 'Necessary' cookies found.
+    *   **Medium Risk:** Compliant non-essential cookies are present, or minor non-compliance (e.g., one or two post-rejection trackers).
+    *   **High Risk:** Multiple post-rejection violations or a few pre-consent violations.
+    *   **Critical Risk:** Widespread pre-consent violations, especially involving sensitive data or aggressive marketing trackers.
+
+4.  **Purpose:** Provide a brief, clear 'purpose' for each cookie.
+
+5.  **JSON Output:** The final output must be a single, valid JSON object matching the provided schema. Do not include any text outside the JSON block.
+`;
+
+    const prompt = `
+Analyze the following data from a scan of ${url} and return the analysis as a JSON object.
+
+**Scan Data:**
+
+*   **Pre-Consent (before any interaction):**
+    *   Cookies: ${JSON.stringify(preConsentCookies.map(c=>c.name))}
+    *   Trackers: ${JSON.stringify(preConsentTrackers.map(t=>t.provider))}
+
+*   **Post-Rejection (after user rejected consent):**
+    *   Cookies: ${JSON.stringify(postRejectionCookies.map(c=>c.name))}
+    *   Trackers: ${JSON.stringify(postRejectionTrackers.map(t=>t.provider))}
+
+*   **Final State (after user accepted consent):**
+    *   Cookies: ${JSON.stringify(finalCookies)}
+    *   Trackers: ${JSON.stringify(finalTrackers)}
+
+Based on these lists, perform the analysis as described in your instructions and provide the JSON output.
+`;
     
-    if (itemsForAnalysis.cookies.length === 0 && itemsForAnalysis.trackers.length === 0) {
-      return res.json({
-          cookies: [], trackers: [], screenshotBase64,
-          compliance: {
-              gdpr: { riskLevel: 'Low', assessment: 'No cookies or trackers were detected.'},
-              ccpa: { riskLevel: 'Low', assessment: 'No cookies or trackers were detected.'},
-          }
-      });
-    }
-
-    const cookiePrompt = `
-      You are a world-class privacy and web compliance expert AI.
-      Your task is to analyze cookie and tracker data from "${url}" and return your findings as a single, valid JSON object.
-
-      **ULTRA-CRITICAL INSTRUCTIONS (FAILURE TO COMPLY WILL RENDER YOUR OUTPUT USELESS):**
-      1.  Your ENTIRE response MUST be a single, raw, valid JSON object.
-      2.  START your response immediately with "{" and END it with "}".
-      3.  DO NOT include \`\`\`json, \`\`\`, explanations, or any text outside of the JSON object.
-      4.  JSON STRING ESCAPING IS PARAMOUNT: You MUST correctly escape all special characters like double quotes (") and newlines (\\n) within all string values to ensure the final output is machine-parseable.
-      
-      Data for Analysis:
-      ${JSON.stringify(itemsForAnalysis, null, 2)}
-      
-      Analyze the data and return a JSON object that adheres strictly to the provided schema.
-      1.  **"cookies" & "trackers"**: For each item:
-          - **key**: The original unique key (unmodified).
-          - **category**: Categorize with extreme accuracy: 'Necessary', 'Functional', 'Analytics', 'Marketing', or 'Unknown'. Only essential-for-operation items are 'Necessary'.
-          - **purpose**: (For cookies only) A CONCISE, one-sentence description of its function.
-          - **complianceStatus**: Determine based on its 'states' and 'category':
-              - 'Compliant' if category is 'Necessary'.
-              - 'Pre-Consent Violation' if state includes 'pre-consent' AND category is NOT 'Necessary'.
-              - 'Post-Rejection Violation' if state includes 'post-rejection' AND category is NOT 'Necessary'.
-              - 'Compliant' for all other cases.
-      2.  **"compliance"**: An object with "gdpr" and "ccpa" keys. For both, provide:
-          - **riskLevel**: 'Low', 'Medium', or 'High'. Any violation makes the risk 'High'. Many non-necessary but compliant trackers suggest 'Medium' risk.
-          - **assessment**: A brief, expert summary explaining the risk level. Start with the number of violations found (e.g., "High risk due to 5 pre-consent violations.").
-    `;
-
-    const cookieResponseSchema = {
+    const responseSchema = {
         type: Type.OBJECT,
         properties: {
-          cookies: { type: Type.ARRAY, items: {
-            type: Type.OBJECT, properties: { key: { type: Type.STRING }, category: { type: Type.STRING }, purpose: { type: Type.STRING }, complianceStatus: { type: Type.STRING } }, required: ["key", "category", "purpose", "complianceStatus"],
-          }},
-          trackers: { type: Type.ARRAY, items: {
-            type: Type.OBJECT, properties: { key: { type: Type.STRING }, category: { type: Type.STRING }, complianceStatus: { type: Type.STRING } }, required: ["key", "category", "complianceStatus"],
-          }},
-          compliance: { type: Type.OBJECT, properties: {
-              gdpr: { type: Type.OBJECT, properties: { riskLevel: { type: Type.STRING }, assessment: { type: Type.STRING } }, required: ['riskLevel', 'assessment']},
-              ccpa: { type: Type.OBJECT, properties: { riskLevel: { type: Type.STRING }, assessment: { type: Type.STRING } }, required: ['riskLevel', 'assessment']},
-          }, required: ['gdpr', 'ccpa']},
+            cookies: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        key: { type: Type.STRING },
+                        category: { type: Type.STRING, enum: Object.values(CookieCategory) },
+                        purpose: { type: Type.STRING },
+                        complianceStatus: { type: Type.STRING, enum: ['Compliant', 'Pre-Consent Violation', 'Post-Rejection Violation', 'Unknown'] },
+                    }
+                }
+            },
+            trackers: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        key: { type: Type.STRING },
+                        category: { type: Type.STRING, enum: Object.values(CookieCategory) },
+                        complianceStatus: { type: Type.STRING, enum: ['Compliant', 'Pre-Consent Violation', 'Post-Rejection Violation', 'Unknown'] },
+                    }
+                }
+            },
+            compliance: {
+                type: Type.OBJECT,
+                properties: {
+                    gdpr: { 
+                        type: Type.OBJECT, 
+                        properties: { riskLevel: { type: Type.STRING }, assessment: { type: Type.STRING } } 
+                    },
+                    ccpa: { 
+                        type: Type.OBJECT, 
+                        properties: { riskLevel: { type: Type.STRING }, assessment: { type: Type.STRING } } 
+                    }
+                }
+            }
+        }
+    };
+
+    const result = await withRetry(async () => {
+        const genAIResponse = await ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: prompt }] }],
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+                temperature: 0.1
+            }
+        });
+        return genAIResponse;
+    });
+    
+    const jsonText = extractJson(result.text);
+    return JSON.parse(jsonText) as GeminiScanAnalysis;
+}
+
+async function analyzeDpaWithGemini(dpaText: string, perspective: DpaPerspective): Promise<DpaAnalysisResult> {
+  const systemInstruction = `
+You are a legal expert specializing in data privacy agreements (DPAs) like those under GDPR. Analyze the provided DPA text from the perspective of a ${perspective}. Your analysis must be structured, practical, and risk-focused.
+
+**Analysis Rules:**
+
+1.  **Perspective is Key:**
+    *   If **Controller**, focus on risks where the Processor has too much control, vague responsibilities, or insufficient security commitments.
+    *   If **Processor**, focus on risks where the Controller imposes unreasonable obligations, liability is unlimited, or instructions are ambiguous.
+
+2.  **Clause Identification:** Identify key clauses (e.g., 'Data Security', 'Sub-processors', 'Audits', 'Liability', 'Data Deletion').
+
+3.  **Risk Level:** Assign a 'riskLevel' ('Low', 'Medium', 'High', 'Critical') to each clause.
+    *   **Low:** Standard, fair, and clear clause.
+    *   **Medium:** Vague language or minor imbalance.
+    *   **High:** Significant imbalance of obligations or clear risk exposure.
+    *   **Critical:** Unacceptable terms, unlimited liability, or non-compliance with major regulations.
+
+4.  **Practical Advice:** For each clause, provide:
+    *   'summary': A plain-language explanation of the clause.
+    *   'risk': A clear description of the specific risk from your perspective.
+    *   'recommendation': A concrete suggestion for how to mitigate the risk (e.g., "Propose adding a specific timeframe for breach notification...").
+    *   'negotiationTip': A practical tip for discussing the change (e.g., "Frame this as a request for clarity to ensure both parties are protected.").
+
+5.  **Overall Assessment:** Provide an 'overallRisk' object with a 'level' and a 'summary' of the entire DPA's risk profile.
+
+6.  **JSON Output:** The final output must be a single, valid JSON object matching the provided schema. Do not include any text outside the JSON block.
+`;
+
+    const prompt = `
+Analyze the following DPA text from the perspective of a **${perspective}**.
+
+**DPA Text:**
+\`\`\`
+${dpaText}
+\`\`\`
+
+Based on this text, perform the analysis as described in your instructions and provide the JSON output.
+`;
+
+    const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+            overallRisk: {
+                type: Type.OBJECT,
+                properties: {
+                    level: { type: Type.STRING, enum: ['Critical', 'High', 'Medium', 'Low', 'Informational'] },
+                    summary: { type: Type.STRING },
+                },
+            },
+            analysis: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        clause: { type: Type.STRING },
+                        summary: { type: Type.STRING },
+                        risk: { type: Type.STRING },
+                        riskLevel: { type: Type.STRING, enum: ['Critical', 'High', 'Medium', 'Low', 'Informational'] },
+                        recommendation: { type: Type.STRING },
+                        negotiationTip: { type: Type.STRING },
+                    },
+                },
+            },
         },
-        required: ["cookies", "trackers", "compliance"],
     };
     
-    const geminiResult = await withRetry(() => ai.models.generateContent({
-        model,
-        contents: cookiePrompt,
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: cookieResponseSchema,
-        },
-    }));
-    
-    const geminiText = geminiResult.text;
-    if (!geminiText) throw new Error('Gemini API returned an empty response.');
-
-    const jsonString = extractJson(geminiText);
-    let analysis: GeminiScanAnalysis;
-    try {
-      analysis = JSON.parse(jsonString) as GeminiScanAnalysis;
-    } catch(parseError: any) {
-      console.error("[FATAL] Failed to parse JSON from Gemini for cookie scan.");
-      console.error("----- RAW GEMINI TEXT -----");
-      console.error(geminiText);
-      console.error("----- EXTRACTED JSON STRING -----");
-      console.error(jsonString);
-      console.error("----- PARSE ERROR -----");
-      console.error(parseError);
-      throw new Error(`AI analysis returned a malformed response. Parsing error: ${parseError.message}`);
-    }
-
-    const cookieAnalysisMap = new Map(analysis.cookies.map((c) => [c.key, c]));
-    const trackerAnalysisMap = new Map(analysis.trackers.map((t) => [t.key, t]));
-    const scannedUrlHostname = new URL(url).hostname;
-
-    const finalEnrichedCookies: CookieInfo[] = Array.from(allCookieMap.values()).map(c => {
-        const key = `${c.data.name}|${c.data.domain}|${c.data.path}`;
-        const analyzed = cookieAnalysisMap.get(key);
-        const domain = c.data.domain.startsWith('.') ? c.data.domain : `.${c.data.domain}`;
-        const rootDomain = `.${scannedUrlHostname.replace(/^www\./, '')}`;
-        return {
-            key, name: c.data.name, provider: c.data.domain, expiry: getHumanReadableExpiry(c.data),
-            party: domain.endsWith(rootDomain) ? 'First' : 'Third',
-            isHttpOnly: c.data.httpOnly, isSecure: c.data.secure,
-            complianceStatus: analyzed?.complianceStatus || 'Unknown',
-            category: analyzed?.category || CookieCategory.UNKNOWN,
-            purpose: analyzed?.purpose || 'No purpose determined.',
-        };
-    });
-
-    const finalEnrichedTrackers: TrackerInfo[] = Array.from(allTrackerMap.values()).map(t => {
-        const [provider, trackerUrl] = t.data.split('|');
-        const key = `${provider}|${trackerUrl}`;
-        const analyzed = trackerAnalysisMap.get(key);
-        return {
-            key, url: trackerUrl, provider,
-            category: analyzed?.category || CookieCategory.UNKNOWN,
-            complianceStatus: analyzed?.complianceStatus || 'Unknown',
-        };
-    });
-
-    res.json({ cookies: finalEnrichedCookies, trackers: finalEnrichedTrackers, compliance: analysis.compliance, screenshotBase64 });
-
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "An unknown error occurred.";
-    console.error('[SERVER] Scan failed:', message, error);
-    res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
-  } finally {
-    if (browser) {
-      console.log('[PUPPETEER] Closing browser for this request.');
-      await browser.close();
-    }
-  }
-});
-
-
-interface DpaReviewRequestBody { dpaText: string; perspective: DpaPerspective; }
-
-app.post('/api/review-dpa', async (req: ExpressRequest<{}, any, DpaReviewRequestBody>, res: ExpressResponse) => {
-    const { dpaText, perspective } = req.body;
-    if (!dpaText || !perspective) {
-        return res.status(400).json({ error: 'DPA text and perspective are required' });
-    }
-
-    console.log(`[SERVER] Received DPA review request from perspective: ${perspective}`);
-
-    try {
-        const perspectiveText = perspective === 'controller' ? 'Data Controller' : 'Data Processor';
-        const dpaPrompt = `
-          You are a world-class data privacy lawyer AI.
-          Your task is to review a Data Processing Agreement (DPA) and return your analysis as a single, valid JSON object.
-
-          **ULTRA-CRITICAL INSTRUCTIONS (FAILURE TO COMPLY WILL RENDER YOUR OUTPUT USELESS):**
-          1.  Your ENTIRE response MUST be a single, raw, valid JSON object.
-          2.  START your response immediately with "{" and END it with "}".
-          3.  DO NOT include \`\`\`json, \`\`\`, explanations, or any text outside of the JSON object.
-          4.  JSON STRING ESCAPING IS PARAMOUNT: You MUST correctly escape all special characters like double quotes (") and newlines (\\n) within all string values ("summary", "risk", "recommendation", etc.) to ensure the final output is machine-parseable.
-
-          Analyze major clauses (e.g., Subject Matter, Data Subject Rights, Processor's Obligations, Sub-processing, Data Transfers, Liability, Audits, Breach Notification, Termination) from the powerful perspective of a **${perspectiveText}**.
-          For each clause:
-          1.  **summary**: A neutral summary of what the clause contains.
-          2.  **risk**: A detailed analysis of the risks for the specified perspective. Be specific.
-          3.  **riskLevel**: 'Low', 'Medium', 'High'. If a key clause is missing or vague, assign 'High' risk.
-          4.  **recommendation**: A concrete, actionable recommendation for negotiation or clarification.
-          5.  **negotiationTip**: A sharp, strategic tip for negotiation. Example: "Propose capping liability at 12 months of fees paid." or "Demand a specific timeframe for breach notification (e.g., 24 hours)."
-
-          Also provide an **overallRisk** object with a 'level' and 'summary'.
-
-          DPA Text to Analyze:
-          ---
-          ${dpaText}
-          ---
-        `;
-
-        const dpaResponseSchema = {
-            type: Type.OBJECT,
-            properties: {
-                overallRisk: { type: Type.OBJECT, properties: {
-                    level: { type: Type.STRING, description: "Overall risk level, can be 'Low', 'Medium', or 'High'." },
-                    summary: { type: Type.STRING, description: "A brief summary explaining the overall risk level based on the analysis."}
-                }, required: ["level", "summary"]},
-                analysis: { type: Type.ARRAY, items: {
-                    type: Type.OBJECT, properties: {
-                        clause: { type: Type.STRING, description: "The name of the DPA clause being analyzed." },
-                        summary: { type: Type.STRING, description: "A neutral summary of what the clause contains." },
-                        risk: { type: Type.STRING, description: "A detailed analysis of the risks for the specified perspective." },
-                        riskLevel: { type: Type.STRING, description: "Risk level for this clause: 'Low', 'Medium', 'High'." },
-                        recommendation: { type: Type.STRING, description: "A concrete, actionable recommendation for negotiation or clarification." },
-                        negotiationTip: { type: Type.STRING, description: "A sharp, strategic tip for negotiation." }
-                    }, required: ["clause", "summary", "risk", "riskLevel", "recommendation", "negotiationTip"]
-                }}
-            },
-            required: ["overallRisk", "analysis"]
-        };
-
-        const result = await withRetry(() => ai.models.generateContent({
-            model,
-            contents: dpaPrompt,
+    const result = await withRetry(async () => {
+        const genAIResponse = await ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: prompt }] }],
             config: {
+                systemInstruction: systemInstruction,
                 responseMimeType: "application/json",
-                responseSchema: dpaResponseSchema,
-            },
-        }));
+                responseSchema: responseSchema,
+                temperature: 0.2
+            }
+        });
+        return genAIResponse;
+    });
 
-        const resultText = result.text;
-        if (!resultText) {
-            throw new Error('Gemini API returned an empty response for DPA analysis.');
+    const jsonText = extractJson(result.text);
+    return JSON.parse(jsonText) as DpaAnalysisResult;
+}
+
+async function analyzeVulnerabilitiesWithGemini(url: string, pageSource: string, headers: Record<string, string>): Promise<VulnerabilityReport> {
+    const systemInstruction = `
+You are a senior cybersecurity analyst specializing in web application security. Your task is to perform a passive, non-intrusive vulnerability scan based on the provided page source and HTTP headers.
+
+**Analysis Rules:**
+
+1.  **Passive Analysis Only:** Do not suggest any active scanning or testing. Your analysis is based *only* on the provided HTML source and headers.
+2.  **Identify Common Vulnerabilities:** Check for indicators of common vulnerabilities like:
+    *   **Security Headers:** Missing or misconfigured headers (X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security, Content-Security-Policy, etc.).
+    *   **Information Exposure:** Sensitive information in comments, metadata, or scripts (e.g., API keys, internal paths, versions).
+    *   **Outdated Libraries:** Look for common JS libraries and mention the *potential* risk if they are outdated (e.g., "Uses jQuery, ensure it's the latest version to avoid known CVEs.").
+    *   **Insecure Form Handling:** `action` attributes pointing to HTTP endpoints, lack of CSRF tokens (mention this as a potential issue).
+    *   **Mixed Content:** Loading scripts or resources over HTTP on an HTTPS page.
+3.  **Structure and Detail:**
+    *   'title': A clear, descriptive title for the vulnerability.
+    *   'description': Explain what the vulnerability is and why it's a risk.
+    *   'risk': Assign a 'risk' level ('Critical', 'High', 'Medium', 'Low', 'Informational'). Base this on potential impact.
+    *   'remediation': Provide a clear, actionable remediation plan. Include code examples where appropriate.
+    *   'owaspCategory': Link it to a relevant OWASP Top 10 category (e.g., 'A05:2021 - Security Misconfiguration').
+4.  **Overall Assessment:** Provide an 'overallScore' (0-100, where 100 is excellent), a summary 'riskLevel', and a brief 'summary' of the site's security posture.
+5.  **JSON Output:** The final output must be a single, valid JSON object matching the provided schema. Do not include any text outside the JSON block.
+`;
+
+    const prompt = `
+Analyze the following data from a passive scan of ${url}.
+
+**HTTP Headers:**
+\`\`\`json
+${JSON.stringify(headers, null, 2)}
+\`\`\`
+
+**Page Source (first 10000 chars):**
+\`\`\`html
+${pageSource.substring(0, 10000)}
+\`\`\`
+
+Based on this data, perform the analysis as described in your instructions and provide the JSON output. If no significant vulnerabilities are found, return an empty 'vulnerabilities' array and a high score.
+`;
+    
+    const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+            overallScore: { type: Type.INTEGER },
+            riskLevel: { type: Type.STRING, enum: ['Critical', 'High', 'Medium', 'Low', 'Informational', 'Unknown'] },
+            summary: { type: Type.STRING },
+            vulnerabilities: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        title: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        risk: { type: Type.STRING, enum: ['Critical', 'High', 'Medium', 'Low', 'Informational'] },
+                        remediation: { type: Type.STRING },
+                        owaspCategory: { type: Type.STRING },
+                    }
+                }
+            }
         }
-        
-        const jsonString = extractJson(resultText);
-        const analysisResult = JSON.parse(jsonString) as DpaAnalysisResult;
-        res.json(analysisResult);
+    };
+    
+    const result = await withRetry(async () => {
+        const genAIResponse = await ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: prompt }] }],
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+                temperature: 0.1
+            }
+        });
+        return genAIResponse;
+    });
 
-    } catch (error) {
-        const message = error instanceof Error ? error.message : "An unknown error occurred.";
-        console.error('[SERVER] DPA review failed:', message);
-        res.status(500).json({ error: `Failed to review DPA. ${message}` });
-    }
-});
+    const jsonText = extractJson(result.text);
+    return JSON.parse(jsonText) as VulnerabilityReport;
+}
 
 
-interface VulnerabilityScanBody { url: string; }
+// --- API ENDPOINTS ---
 
-app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, VulnerabilityScanBody>, res: ExpressResponse) => {
+interface ApiScanRequestBody {
+  url: string;
+}
+
+app.post('/api/scan', async (req: Request<{}, {}, ApiScanRequestBody>, res: Response) => {
     const { url } = req.body;
-    if (!url) return res.status(400).json({ error: 'URL is required' });
-
-    console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+    
+    console.log(`[SERVER] Received scan request for: ${url}`);
+    
     let browser: Browser | null = null;
     try {
         console.log('[PUPPETEER] Launching new browser for this request.');
         browser = await puppeteer.launch({
-            args: [
-                ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--ignore-certificate-errors',
-            ],
+            args: chromium.args,
             executablePath: await chromium.executablePath(),
-            headless: true,
+            headless: 'new',
         });
         console.log('[PUPPETEER] Browser launched successfully.');
-        
-        const context = await browser.createBrowserContext();
-        const page = await context.newPage();
-        
-        const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 });
-        const headers = response?.headers() || {};
-        const html = await page.content();
-        const externalScripts = await page.$$eval('script[src]', scripts => (scripts.map(s => s.getAttribute('src')).filter(Boolean) as string[]));
-        const hasPasswordFields = (await page.$$('input[type="password"]')).length > 0;
-        
-        const vulnerabilityPrompt = `
-            You are a world-class penetration tester and cybersecurity analyst AI.
-            Your task is to perform a passive security assessment of ${url} and return your findings as a single, valid JSON object.
 
-            **ULTRA-CRITICAL INSTRUCTIONS (FAILURE TO COMPLY WILL RENDER YOUR OUTPUT USELESS):**
-            1.  Your ENTIRE response MUST be a single, raw, valid JSON object.
-            2.  START your response immediately with "{" and END it with "}".
-            3.  DO NOT include \`\`\`json, \`\`\`, explanations, or any text outside of the JSON object.
-            4.  **JSON STRING ESCAPING IS PARAMOUNT:** Within the "remediation" field, which may contain code examples, you MUST correctly escape all special characters. Backslashes (\\), double quotes ("), and newlines (\\n) MUST be properly escaped (as \\\\, \\", and \\n respectively). This is the most important rule to prevent parsing errors.
-
-            **Provided Data for Analysis:**
-            1.  Response Headers: ${JSON.stringify(headers, null, 2)}
-            2.  External Scripts: ${JSON.stringify(externalScripts, null, 2)}
-            3.  Has Password Fields: ${hasPasswordFields}
-            4.  HTML (first 8000 chars): ${html.substring(0, 8000)}
-
-            **Analysis Instructions (Be Extremely Thorough):**
-            1.  **Security Headers**: Meticulously check for missing or weak security headers (Content-Security-Policy, Strict-Transport-Security, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy). For CSP, analyze its strength. Is it too permissive?
-            2.  **Information Disclosure**: Identify any revealing headers like 'Server', 'X-Powered-By', 'X-AspNet-Version'.
-            3.  **Cookie Security**: From the 'set-cookie' headers (if any), analyze if cookies are missing 'HttpOnly', 'Secure', or 'SameSite=Strict/Lax' attributes.
-            4.  **Supply-Chain Risk**: For each external script, assess the potential risk. Is it a well-known, reputable provider (e.g., Google, Cloudflare) or an obscure one? Mention any known risks with common third-party scripts.
-            5.  **HTML Analysis**: Check for insecure form actions (HTTP links), autocomplete enabled on sensitive fields, or any exposed API keys or comments that could be a security risk.
-        `;
-        
-        const vulnerabilityResponseSchema = {
-            type: Type.OBJECT,
-            properties: {
-                overallScore: { type: Type.NUMBER, description: "A security score from 0 (worst) to 100 (best), based on the severity and number of findings." },
-                riskLevel: { type: Type.STRING, description: "Overall risk level: 'Critical', 'High', 'Medium', 'Low', or 'Informational'." },
-                summary: { type: Type.STRING, description: "A high-level, expert summary of the website's security posture." },
-                vulnerabilities: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            title: { type: Type.STRING, description: "A clear, impactful title for the vulnerability." },
-                            description: { type: Type.STRING, description: "A detailed explanation of the vulnerability and its potential impact, as an expert would describe it." },
-                            risk: { type: Type.STRING, description: "Risk level for this finding: 'Critical', 'High', 'Medium', 'Low', 'Informational'." },
-                            remediation: { type: Type.STRING, description: "A concrete, actionable plan with code examples to fix the vulnerability." },
-                            owaspCategory: { type: Type.STRING, description: "The most relevant OWASP Top 10 2011 category (e.g., 'A05:2021-Security Misconfiguration')." }
-                        },
-                        required: ["title", "description", "risk", "remediation", "owaspCategory"]
-                    }
-                }
-            },
-            required: ["overallScore", "riskLevel", "summary", "vulnerabilities"]
+        const siteDomain = getDomain(url);
+        const collectedTrackers = new Set<string>();
+        const onResponse = (frame: Frame) => {
+            const requestUrl = frame.url();
+            if (knownTrackerDomains.some(domain => requestUrl.includes(domain)) && !requestUrl.startsWith('data:')) {
+                collectedTrackers.add(requestUrl);
+            }
         };
         
-        const result = await withRetry(() => ai.models.generateContent({
-            model,
-            contents: vulnerabilityPrompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: vulnerabilityResponseSchema,
-            },
-        }));
+        const context = await browser.createBrowserContext();
+        const page = (await context.pages())[0];
+        await page.setViewport({ width: 1280, height: 800 });
+        page.on('response', onResponse);
+
+        // Stage 1: Pre-Consent
+        console.log('[SCAN] Stage 1: Pre-Consent scan...');
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(r => setTimeout(r, 3000)); // Wait for dynamic scripts
+        const preConsentRawCookies = await page.cookies();
+        const preConsentTrackers = Array.from(collectedTrackers).map(getTrackerInfo);
+        const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 70 });
         
-        const resultText = result.text;
-        if (!resultText) {
-            throw new Error('Gemini API returned an empty response for vulnerability scan.');
-        }
-
-        const jsonString = extractJson(resultText);
-        let report: VulnerabilityReport;
+        // Stage 2: Post-Rejection
+        console.log('[SCAN] Stage 2: Post-Rejection scan...');
+        collectedTrackers.clear();
+        await page.reload({ waitUntil: 'networkidle2' });
+        // This is a generic rejection simulation. It won't work for all banners.
         try {
-            report = JSON.parse(jsonString) as VulnerabilityReport;
-        } catch (parseError: any) {
-            console.error("Failed to parse JSON from Gemini for vulnerability scan.");
-            console.error("Original Text:", resultText);
-            console.error("Extracted Text:", jsonString);
-            throw new Error(`AI analysis returned a malformed response. Parsing error: ${parseError.message}`);
+          await page.evaluate(() => {
+            const selectors = [
+              '[id*="reject"]', '[class*="reject"]', '[id*="decline"]', '[class*="decline"]',
+              'button ::-p-text(Reject all)', 'button ::-p-text(Decline all)', 'button ::-p-text(I refuse)'
+            ];
+            const rejectButton = document.querySelector(selectors.join(', '));
+            if (rejectButton && (rejectButton as HTMLElement).click) {
+              (rejectButton as HTMLElement).click();
+            }
+          });
+          await new Promise(r => setTimeout(r, 2000));
+        } catch(e) {
+          console.warn("Could not find or click a reject button.");
         }
-        res.json(report);
+        const postRejectionRawCookies = await page.cookies();
+        const postRejectionTrackers = Array.from(collectedTrackers).map(getTrackerInfo);
 
-    } catch (error) {
-        const message = error instanceof Error ? error.message : "An unknown error occurred during the vulnerability scan.";
-        console.error('[SERVER] Vulnerability scan failed:', message);
-        res.status(500).json({ error: `Failed to scan ${url}. ${message}` });
+        // Stage 3: Final State (Accept all)
+        console.log('[SCAN] Stage 3: Final state scan...');
+        collectedTrackers.clear();
+        await page.reload({ waitUntil: 'networkidle2' });
+        try {
+          await page.evaluate(() => {
+            const selectors = [
+              '[id*="accept"]', '[class*="accept"]', '[id*="allow"]', '[class*="allow"]',
+              'button ::-p-text(Accept all)', 'button ::-p-text(Allow all)'
+            ];
+            const acceptButton = document.querySelector(selectors.join(', '));
+            if (acceptButton && (acceptButton as HTMLElement).click) {
+                (acceptButton as HTMLElement).click();
+            }
+          });
+          await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+            console.warn("Could not find or click an accept button.");
+        }
+        const finalRawCookies = await page.cookies();
+        const finalTrackers = Array.from(collectedTrackers).map(getTrackerInfo);
+
+        page.off('response', onResponse);
+        await context.close();
+        
+        console.log('[AI] Analyzing data with Gemini...');
+        const analysis = await analyzeWithGemini(
+            url,
+            preConsentRawCookies.map(c => getCookieInfo(c, siteDomain)),
+            preConsentTrackers,
+            postRejectionRawCookies.map(c => getCookieInfo(c, siteDomain)),
+            postRejectionTrackers,
+            finalRawCookies.map(c => getCookieInfo(c, siteDomain)),
+            finalTrackers
+        );
+
+        const finalCookiesWithAnalysis = finalRawCookies.map(cookie => {
+            const info = getCookieInfo(cookie, siteDomain);
+            const cookieAnalysis = analysis.cookies.find(c => c.key === info.key);
+            return { ...info, ...cookieAnalysis };
+        });
+        
+        const finalTrackersWithAnalysis = finalTrackers.map(tracker => {
+            const trackerAnalysis = analysis.trackers.find(t => t.key === tracker.key);
+            return { ...tracker, ...trackerAnalysis };
+        });
+
+        const scanResult: ScanResultData = {
+            cookies: finalCookiesWithAnalysis,
+            trackers: finalTrackersWithAnalysis,
+            screenshotBase64,
+            compliance: analysis.compliance,
+        };
+        
+        console.log('[SERVER] Scan complete. Sending results.');
+        res.json(scanResult);
+
+    } catch (error: any) {
+        console.error('[SERVER] Scan failed:', error);
+        res.status(500).json({ error: error.message || 'An unexpected error occurred during the scan.' });
     } finally {
         if (browser) {
             console.log('[PUPPETEER] Closing browser for this request.');
@@ -634,7 +610,80 @@ app.post('/api/scan-vulnerability', async (req: ExpressRequest<{}, any, Vulnerab
     }
 });
 
+interface DpaReviewRequestBody {
+  dpaText: string;
+  perspective: DpaPerspective;
+}
+
+app.post('/api/review-dpa', async (req: Request<{}, {}, DpaReviewRequestBody>, res: Response) => {
+    const { dpaText, perspective } = req.body;
+    if (!dpaText || !perspective) {
+        return res.status(400).json({ error: 'DPA text and perspective are required' });
+    }
+
+    console.log(`[SERVER] Received DPA review request. Perspective: ${perspective}`);
+    
+    try {
+        const analysisResult = await analyzeDpaWithGemini(dpaText, perspective);
+        console.log('[SERVER] DPA analysis complete. Sending results.');
+        res.json(analysisResult);
+    } catch (error: any) {
+        console.error('[SERVER] DPA analysis failed:', error);
+        res.status(500).json({ error: error.message || 'An unexpected error occurred during the DPA analysis.' });
+    }
+});
+
+interface VulnerabilityScanBody {
+    url: string;
+}
+
+app.post('/api/scan-vulnerability', async (req: Request<{}, {}, VulnerabilityScanBody>, res: Response) => {
+    const { url } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+    
+    console.log(`[SERVER] Received vulnerability scan request for: ${url}`);
+    
+    let browser: Browser | null = null;
+    try {
+        console.log('[PUPPETEER] Launching new browser for this request.');
+        browser = await puppeteer.launch({
+            args: chromium.args,
+            executablePath: await chromium.executablePath(),
+            headless: 'new',
+        });
+        console.log('[PUPPETEER] Browser launched successfully.');
+        
+        const page = (await browser.pages())[0];
+        await page.setBypassCSP(true);
+
+        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+        const pageSource = await response?.text() ?? '';
+        const headers = response?.headers() ?? {};
+
+        console.log('[AI] Analyzing vulnerabilities with Gemini...');
+        const report = await analyzeVulnerabilitiesWithGemini(url, pageSource, headers);
+
+        console.log('[SERVER] Vulnerability scan complete. Sending results.');
+        res.json(report);
+
+    } catch (error: any) {
+        console.error('[SERVER] Vulnerability scan failed:', error);
+        res.status(500).json({ error: error.message || 'An unexpected error occurred during the vulnerability scan.' });
+    } finally {
+        if (browser) {
+            console.log('[PUPPETEER] Closing browser for this request.');
+            await browser.close();
+        }
+    }
+});
+
+app.get('/', (req, res) => {
+  res.send('Cookie Care Backend is running!');
+});
+
 
 app.listen(port, () => {
-  console.log(`[SERVER] Cookie Care listening on port ${port}`);
+    console.log(`[SERVER] Cookie Care listening on port ${port}`);
 });
