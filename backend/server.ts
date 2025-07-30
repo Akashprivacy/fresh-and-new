@@ -1,5 +1,5 @@
 
-import express from 'express';
+import express, { Express, Request, Response } from 'express';
 import puppeteer from 'puppeteer-core';
 import type { Cookie, Page, Frame, Browser, BrowserContext, HTTPResponse } from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
@@ -7,10 +7,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { CookieCategory, type CookieInfo, type ScanResultData, type TrackerInfo, type DpaAnalysisResult, type DpaPerspective, type VulnerabilityReport, type GeminiScanAnalysis } from './types.js';
+import { exit } from 'node:process';
 
 dotenv.config();
 
-const app: express.Application = express();
+const app: Express = express();
 const port = process.env.PORT || 3001;
 
 // --- DEFINITIVE, PRODUCTION-READY CORS SETUP ---
@@ -61,12 +62,13 @@ app.use(cors(corsOptions));
 
 app.use(express.json({ limit: '10mb' }));
 
-if (!process.env.API_KEY) {
+const apiKey = process.env.API_KEY;
+if (!apiKey) {
   console.error("FATAL ERROR: API_KEY environment variable is not set.");
-  (process as any).exit(1);
+  exit(1);
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: apiKey });
 const model = "gemini-2.5-flash";
 
 
@@ -479,7 +481,7 @@ interface ApiScanRequestBody {
   url: string;
 }
 
-app.post('/api/scan', async (req: express.Request<{}, {}, ApiScanRequestBody>, res: express.Response) => {
+app.post('/api/scan', async (req: Request<{}, {}, ApiScanRequestBody>, res: Response) => {
     const { url } = req.body;
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -625,7 +627,7 @@ interface DpaReviewRequestBody {
   perspective: DpaPerspective;
 }
 
-app.post('/api/review-dpa', async (req: express.Request<{}, {}, DpaReviewRequestBody>, res: express.Response) => {
+app.post('/api/review-dpa', async (req: Request<{}, {}, DpaReviewRequestBody>, res: Response) => {
     const { dpaText, perspective } = req.body;
     if (!dpaText || !perspective) {
         return res.status(400).json({ error: 'DPA text and perspective are required' });
@@ -647,7 +649,7 @@ interface VulnerabilityScanBody {
     url: string;
 }
 
-app.post('/api/scan-vulnerability', async (req: express.Request<{}, {}, VulnerabilityScanBody>, res: express.Response) => {
+app.post('/api/scan-vulnerability', async (req: Request<{}, {}, VulnerabilityScanBody>, res: Response) => {
     const { url } = req.body;
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -689,7 +691,7 @@ app.post('/api/scan-vulnerability', async (req: express.Request<{}, {}, Vulnerab
     }
 });
 
-app.get('/', (req: express.Request, res: express.Response) => {
+app.get('/', (req: Request, res: Response) => {
   res.send('Cookie Care Backend is running!');
 });
 
